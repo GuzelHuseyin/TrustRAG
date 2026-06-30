@@ -3,3 +3,6 @@ openai
 pypdf
 python-docx
 numpy
+pandas
+pyarrow
+ 

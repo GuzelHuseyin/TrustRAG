@@ -1,26 +1,30 @@
 import sqlite3
 import json
+import time
 
 from embeddings import get_embedding
 from ingestion import process_documents
 from foundry_local_sdk import Configuration, FoundryLocalManager
 
 DB_NAME = "rag_database.db"
+COMMIT_EVERY = 25       # büyük veri setlerinde kayıp olmaması için periyodik kayıt
+SLEEP_BETWEEN_CALLS = 0.05  # yerel sunucuyu art arda isteklerle boğmamak için küçük bekleme
 
 
 def setup_database():
-    """
-    Initialize SQLite database and create documents table if it does not exist.
-    """
+    """Recreates SQLite schema for clean ingestion run."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
+    cursor.execute("DROP TABLE IF EXISTS documents")
+
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documents (
+        CREATE TABLE documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source TEXT,
             chunk_id INTEGER,
             text TEXT,
+            section TEXT,
             embedding TEXT
         )
     """)
@@ -30,46 +34,75 @@ def setup_database():
 
 
 def save_to_db(chunks):
+    """Generate embeddings and store structured chunks in SQLite.
+
+    Commits periodically (every COMMIT_EVERY rows) instead of only at the
+    end, so a crash or interruption on a large dataset (e.g. Wikipedia
+    parquet) doesn't wipe out all progress made so far. Also sleeps
+    briefly between calls so the local Foundry server isn't hit with a
+    continuous burst of requests, which can otherwise cause connection
+    errors partway through a large run.
     """
-    Generate embeddings for text chunks and store them in SQLite database.
-    """
+
     conn = setup_database()
     cursor = conn.cursor()
 
     total = len(chunks)
-    print(f"Processing {total} chunks for embedding and storage.")
+    print(f"Processing {total} chunks for vectorization...")
+
+    saved_count = 0
+    failed_count = 0
 
     for i, chunk in enumerate(chunks, start=1):
-        print(f"Processing {i}/{total}: {chunk['source']} (chunk {chunk['chunk_id']})")
 
-        vector = get_embedding(chunk["text"])
+        print(
+            f"Processing {i}/{total} | "
+            f"{chunk['source']} | section={chunk['section']}"
+        )
+
+        try:
+            vector = get_embedding(chunk["text"])
+        except Exception as e:
+            print(f"Embedding failed: {e}")
+            failed_count += 1
+            continue
 
         if not vector:
-            print(f"Skipping chunk due to missing embedding: {chunk['source']} - {chunk['chunk_id']}")
+            failed_count += 1
             continue
 
         cursor.execute(
             """
-            INSERT INTO documents (source, chunk_id, text, embedding)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO documents (source, chunk_id, text, section, embedding)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
                 chunk["source"],
                 chunk["chunk_id"],
                 chunk["text"],
+                chunk["section"],
                 json.dumps(vector),
             ),
         )
 
+        saved_count += 1
+
+        if saved_count % COMMIT_EVERY == 0:
+            conn.commit()
+            print(f"Checkpoint: {saved_count} chunks saved so far ({failed_count} failed).")
+
+        time.sleep(SLEEP_BETWEEN_CALLS)
+
     conn.commit()
     conn.close()
 
-    print("Database update completed successfully.")
+    print(
+        f"Vector database build completed. "
+        f"Saved: {saved_count}/{total} | Failed: {failed_count}/{total}"
+    )
 
 
-if __name__ == "__main__":
-    print("Starting SQLite vector database pipeline (Day 3).")
-
+def main():
     try:
         print("Initializing Foundry Local runtime...")
 
@@ -82,12 +115,17 @@ if __name__ == "__main__":
 
         manager.start_web_service()
 
-        chunks = process_documents("data")
+        chunks = process_documents("data", parquet_max_rows=5)
 
         if not chunks:
-            print("No documents found in data directory.")
-        else:
-            save_to_db(chunks)
+            print("No documents found.")
+            return
+
+        save_to_db(chunks)
 
     except Exception as e:
-        print(f"Pipeline failed with error: {e}")
+        print(f"Pipeline error: {e}")
+
+
+if __name__ == "__main__":
+    main()
