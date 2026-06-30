@@ -1,0 +1,15 @@
+.venv/
+.venv-*/
+venv/
+
+__pycache__/
+
+rag_database.db
+*.db
+*.sqlite
+
+*.dll
+*.onnx
+*.bin
+*.pt
+*.pkl
