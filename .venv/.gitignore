@@ -13,3 +13,4 @@ rag_database.db
 *.bin
 *.pt
 *.pkl
+*.parquet
