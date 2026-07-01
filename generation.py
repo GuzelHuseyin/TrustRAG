@@ -99,6 +99,7 @@ def generate_answer(query: str) -> str:
                 },
             ],
             temperature=TEMPERATURE,
+            max_tokens=512, 
         )
 
         return response.choices[0].message.content
