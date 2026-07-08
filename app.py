@@ -1,9 +1,3 @@
-"""
-app.py — TrustRAG Web Arayüzü
-Çalıştırmak için: python app.py
-Ardından tarayıcıda: http://localhost:8765
-"""
-
 import json
 import threading
 import time
